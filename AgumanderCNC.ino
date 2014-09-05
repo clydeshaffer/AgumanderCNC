@@ -19,6 +19,8 @@ Adafruit_DCMotor *xAxis = AFMS.getMotor(1);
 Adafruit_DCMotor *yAxis = AFMS.getMotor(2);
 Adafruit_DCMotor *zAxis = AFMS.getMotor(3);
 
+int laserPin = 9;
+
 //AUTOMATICALLY INCREMENTED TIME VALUE
 elapsedMillis timeElapsed;
 
@@ -33,18 +35,18 @@ const int AT_TARGET = 3;
 int target_x = 500;
 int target_y = 500;
 
+int toolDutyCycle = 0; //0-100 (percent) tool activation power or whatever
+
 //CALIBRATION VALUES
 //TODO: ADD CALIBRATION STEP TO DETERMINE REQUIRED MOTOR POWER TO MOVE ALONG EACH AXIS
 int xMin = 1000;
 int xMax = 0;
 int yMin = 1000;
-int yMax = 1000;
+int yMax = 0;
 
 //Global cache for beacon tracking info
 int lastReportedX;
 int lastReportedY;
-
-
 
 //returns x position as 0-1000 value based on min and max
 int convertX(int rawX) {
@@ -63,12 +65,44 @@ void setSpeedPercent(Adafruit_DCMotor *motor, int speedValue) {
   if(speedValue < -100) speedValue = -100;
   int actualSpeed = speedValue * maxSpeed / 100;
   if(actualSpeed < 0) {
-     actualSpeed *= -1;
-     motor->run(BACKWARD);
-  } else {
+    actualSpeed *= -1;
+    motor->run(BACKWARD);
+  } 
+  else {
     motor->run(FORWARD);
   }
   motor->setSpeed(actualSpeed);
+}
+
+//Reads three bytes and sets target parameters
+//if doMove is set FALSE then xPos and yPos are unchanged
+//toolPower only gets like three bits of resolution, at current
+boolean readNextCmd (int *xPos, int *yPos, int *toolPower) {
+  char timeoutCount = 0;
+  char cmdBuf[3];
+  while(Serial.available() < 3) {
+    delay(100);
+    if((timeoutCount++) > 50) return false;
+  }
+  Serial.readBytes(cmdBuf, 3);
+  
+  if(cmdBuf[2] & 16 != 0) {
+    *xPos = cmdBuf[0] | ((((int) cmdBuf[1]) & 3) << 8);
+    *yPos = (cmdBuf[1] >> 2) | ((((int) cmdBuf[2]) & 15) << 8);
+    //*doMove = true;
+  } else {
+    //*doMove = false;
+  }
+  
+  //resolution is 3 bits, or 0-7 range. scaling to 0-100 range in case later protocol has more bandwidth
+  //could precalculate (100/7) but multiplying by 100 then div by 7 each time should preserve precision better
+  *toolPower = ((int) (cmdBuf[2] >> 5)) * 255 / 7;
+}
+
+void setLaserPower(int dutyCycle) {
+  if(dutyCycle > 255) dutyCycle = 255;
+  if(dutyCycle < 0) dutyCycle = 0;
+  analogWrite(laserPin, dutyCycle);
 }
 
 //Called on boot
@@ -76,7 +110,7 @@ void setup() {
   Serial.begin(9600);           // set up Serial library at 9600 bps
   Serial.println("Agumander's Cheapo CNC - Online!");
   Serial.setTimeout(6000);
-  
+
   pixy.init();
 
   AFMS.begin();  // create with the default frequency 1.6KHz
@@ -103,26 +137,27 @@ void loop() {
       if(pixy.blocks[0].y < yMin) yMin = pixy.blocks[0].y;
       if(pixy.blocks[0].y > yMax) yMax = pixy.blocks[0].y;
     }
-    
+
     //cache x and y values
     lastReportedX = pixy.blocks[0].x;
     lastReportedY = pixy.blocks[0].y;
-    
+
     //TODO: track center of block rather than top left corner
   }
-  
+
   if(cncMode == NONE) {
     cncMode = CALIBRATE;
     timeElapsed = 0;
     Serial.print("MODE IS CALIBRATE\n");
-  } else if(cncMode == CALIBRATE) {
-    
+  } 
+  else if(cncMode == CALIBRATE) {
+
     //When calibrating, set positive speed for ten seconds then negative speed for ten seconds
     int dir = (timeElapsed < 10000) ? 100 : -100;    
     setSpeedPercent(xAxis, dir);
     setSpeedPercent(yAxis, dir);
-    
-    
+
+
     if(timeElapsed > 20000) {
       timeElapsed = 0;
       cncMode = GOTO_TARGET;
@@ -132,27 +167,38 @@ void loop() {
       sprintf(buf, "Y Min: %d\tMax: %d\n", yMin, yMax);
       Serial.print(buf);
     }
-  } else if(cncMode == GOTO_TARGET) {
+  } 
+  else if(cncMode == GOTO_TARGET) {
     int deltaX = target_x - convertX(lastReportedX);
     int deltaY = target_y - convertY(lastReportedY);
-    
+
     //two comparisons might be faster than two mults, an add, and a comparison
     //square imprecision area should contribute slightly to temporal accuracy
     if(abs(deltaX) < 20 && abs(deltaY) < 20) {
       setSpeedPercent(xAxis, 0);
       setSpeedPercent(yAxis, 0);
-      cncMode = AT_TARGET;
-      Serial.print("TARGET REACHED\n");
-      sprintf(buf, "X error: %d\n", deltaX);
-      Serial.print(buf);
-      sprintf(buf, "Y error: %d\n", deltaY);
-      Serial.print(buf);
-    } else {
+      if(readNextCmd(&target_x, &target_y, &toolDutyCycle)) {
+        Serial.print("Moving to: ");
+        sprintf(buf, "(%d, %d) ", target_x, target_y);
+        Serial.print(buf);
+        sprintf(buf, "Tool Duty Cycle: %d\n", toolDutyCycle);
+        Serial.print(buf);
+        setLaserPower(toolDutyCycle);
+      } else {
+        Serial.print("CONNECTION TIMED OUT!\n");
+        cncMode = AT_TARGET;
+        setLaserPower(0);
+      }
+    } 
+    else {
       setSpeedPercent(xAxis, -deltaX);
       setSpeedPercent(yAxis, -deltaY);
     }
-  } else {
-      setSpeedPercent(xAxis, 0);
-      setSpeedPercent(yAxis, 0);
+  } 
+  else {
+    setSpeedPercent(xAxis, 0);
+    setSpeedPercent(yAxis, 0);
   }
 }
+
+
