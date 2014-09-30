@@ -1,4 +1,4 @@
-  #include <Wire.h>
+#include <Wire.h>
 #include <Adafruit_MotorShield.h>
 #include "utility/Adafruit_PWMServoDriver.h"
 #include <SPI.h>
@@ -6,10 +6,12 @@
 #include <elapsedMillis.h>
 #include <SD.h>
 
-//REQUIRED LIBRARIES (LICENCED SEPARATELY)
+//REQUIRED LIBRARIES
 ////ElapsedMillis
 ////Pixy (CMUCam5)
 ////Adafruit MotorShield
+
+//OTHER LIBRARIES INCLUDED IN ARDUINO IDE
 
 //reference to camera module
 Pixy pixy;
