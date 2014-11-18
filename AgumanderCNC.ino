@@ -1,6 +1,7 @@
 #include <Wire.h>
 #include <Adafruit_MotorShield.h>
 #include "utility/Adafruit_PWMServoDriver.h"
+#include <PID_v1.h>
 #include <SPI.h>
 #include <Pixy.h>
 #include <elapsedMillis.h>
@@ -23,6 +24,8 @@ Adafruit_DCMotor *yAxis = AFMS.getMotor(2);
 Adafruit_DCMotor *zAxis = AFMS.getMotor(3);
 
 int laserPin = 9;
+int startButtonPin = 7;
+int startButtonState = 0;
 
 //AUTOMATICALLY INCREMENTED TIME VALUE
 elapsedMillis timeElapsed;
@@ -33,6 +36,7 @@ const int NONE = -1;
 const int CALIBRATE = 0;
 const int GOTO_TARGET = 2;
 const int AT_TARGET = 3;
+const int STANDBY = 4;
 
 //TARGET POSITION FOR GOTO_TARGET state
 int target_x = 500;
@@ -63,12 +67,19 @@ int convertY(int rawY) {
   return ((rawY - yMin) * (10000 / (yMax - yMin))) / 10;
 }
 
-int maxSpeed = 128;
+int maxSpeed = 64;
+int minSpeed = 32;
 //speedValue ranges from -100 to 100, as percentage of maxSpeed
 void setSpeedPercent(Adafruit_DCMotor *motor, int speedValue) {
   if(speedValue > 100) speedValue = 100;
   if(speedValue < -100) speedValue = -100;
-  int actualSpeed = speedValue * maxSpeed / 100;
+  int actualSpeed = 0;
+  if(speedValue != 0) {
+    int sign = 1;
+    if(speedValue < 0) sign = -1;
+    actualSpeed = ((speedValue * sign * (maxSpeed - minSpeed) / 100) + minSpeed) * sign;
+  }
+   
   if(actualSpeed < 0) {
     actualSpeed *= -1;
     motor->run(BACKWARD);
@@ -107,6 +118,8 @@ void setLaserPower(int dutyCycle) {
 void setup() {
   pinMode(laserPin, OUTPUT);
   setLaserPower(0);
+  
+  pinMode(startButtonPin, INPUT);
   
   Serial.begin(9600);           // set up Serial library at 9600 bps
   Serial.println("Agumander's Cheapo CNC - Online!");
@@ -161,7 +174,17 @@ void loop() {
     //TODO: track center of block rather than top left corner
   }
 
-  if(cncMode == NONE) {
+  if(cncMode == STANDBY) {
+     startButtonState = digitalRead(startButtonPin);
+     if(startButtonState == HIGH) {
+       cncMode = GOTO_TARGET;
+       timeElapsed = 0;
+       sprintf(buf, "At (%d, %d)", lastReportedX, lastReportedY);
+       Serial.println(buf);
+       Serial.print("MODE IS GOTO_TARGET\n");
+     }
+  }
+  else if(cncMode == NONE) {
     cncMode = CALIBRATE;
     timeElapsed = 0;
     sprintf(buf, "At (%d, %d)", lastReportedX, lastReportedY);
@@ -178,8 +201,8 @@ void loop() {
 
     if(timeElapsed > 20000) {
       timeElapsed = 0;
-      cncMode = GOTO_TARGET;
-      Serial.print("MODE IS GOTO_TARGET\n");
+      cncMode = STANDBY;
+      Serial.print("MODE IS STANDBY\n");
       sprintf(buf, "X Min: %d\tMax: %d\n", xMin, xMax);
       Serial.print(buf);
       sprintf(buf, "Y Min: %d\tMax: %d\n", yMin, yMax);
@@ -210,12 +233,12 @@ void loop() {
       }
     } 
     else {
-      setSpeedPercent(xAxis, -deltaX);
-      setSpeedPercent(yAxis, -deltaY);
+      setSpeedPercent(xAxis, -deltaX * 2);
+      setSpeedPercent(yAxis, -deltaY * 2);
     }
   } 
   else {
     setSpeedPercent(xAxis, 0);
     setSpeedPercent(yAxis, 0);
   }
-}
+
